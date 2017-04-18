@@ -69,7 +69,7 @@
 //control time slot in microseconds
 //each slot is splitted in a working slice and a sleeping slice
 //TODO: make it adaptive, based on the actual system load
-#define TIME_SLOT 100000
+#define TIME_SLOT 50000
 
 #define MAX_PRIORITY -10
 
@@ -91,6 +91,23 @@ int NCPU;
 int verbose = 0;
 //lazy mode (exits if there is no process)
 int lazy = 0;
+//in order to allow a dynamic limit it is a global variable
+double limit=0;
+//dynamicLimitFile
+//TO-DO, DEVO VEDERE COME FARE A PASSARE IL NOME DEL FILE PER PARAMETRO, FORSE C'E' QUALCHE PROBLEMA CON LO SCOPE
+char * dynLimitFile="";
+
+//SIGUSR1 for dynamic limit
+void updateLimit(int sig)
+{
+  FILE *fp;
+  char num[4];
+  //read new limit from a file
+  fp=fopen( dynLimitFile, "r" );
+  fgets(num, 4, (FILE*)fp);
+  //printf("newlimit: %f\n",atoi(num)/100.0);
+  limit=atoi(num)/100.0;
+}
 
 //SIGINT and SIGTERM signal handler
 static void quit(int sig)
@@ -186,7 +203,7 @@ int get_pid_max()
 #endif
 }
 
-void limit_process(pid_t pid, double limit, int include_children)
+void limit_process(pid_t pid, int include_children)
 {
 	//slice of the slot in which the process is allowed to run
 	struct timespec twork;
@@ -336,7 +353,7 @@ int main(int argc, char **argv) {
 	int next_option;
     int option_index = 0;
 	//A string listing valid short options letters
-	const char* short_options = "+p:e:l:vzih";
+	const char* short_options = "+p:e:l:f:vzih";
 	//An array describing valid long options
 	const struct option long_options[] = {
 		{ "pid",        required_argument, NULL, 'p' },
@@ -344,7 +361,8 @@ int main(int argc, char **argv) {
 		{ "limit",      required_argument, NULL, 'l' },
 		{ "verbose",    no_argument,       NULL, 'v' },
 		{ "lazy",       no_argument,       NULL, 'z' },
-		{ "include-children", no_argument,  NULL, 'i' },
+		{ "include-children", no_argument, NULL, 'i' },
+		{ "update-file",required_argument, NULL, 'f' },
 		{ "help",       no_argument,       NULL, 'h' },
 		{ 0,            0,                 0,     0  }
 	};
@@ -376,6 +394,9 @@ int main(int argc, char **argv) {
 			case 'h':
 				print_usage(stdout, 1);
 				break;
+			case 'f':
+				dynLimitFile=optarg;
+				break;
 			case '?':
 				print_usage(stderr, 1);
 				break;
@@ -400,7 +421,8 @@ int main(int argc, char **argv) {
 		print_usage(stderr, 1);
 		exit(1);
 	}
-	double limit = perclimit / 100.0;
+	//limit now is global
+	limit = perclimit / 100.0;
 	if (limit<0 || limit >NCPU) {
 		fprintf(stderr,"Error: limit must be in the range 0-%d00\n", NCPU);
 		print_usage(stderr, 1);
@@ -423,6 +445,7 @@ int main(int argc, char **argv) {
 	//all arguments are ok!
 	signal(SIGINT, quit);
 	signal(SIGTERM, quit);
+	signal(SIGUSR1,updateLimit);
 
 	//print the number of available cpu
 	if (verbose) printf("%d cpu detected\n", NCPU);
@@ -481,7 +504,7 @@ int main(int argc, char **argv) {
 			else {
 				//limiter code
 				if (verbose) printf("Limiting process %d\n",child);
-				limit_process(child, limit, include_children);
+				limit_process(child, include_children);
 				exit(0);
 			}
 		}
@@ -520,7 +543,7 @@ int main(int argc, char **argv) {
 			}
 			printf("Process %d found\n", pid);
 			//control
-			limit_process(pid, limit, include_children);
+			limit_process(pid, include_children);
 		}
 		if (lazy) break;
 		sleep(2);
